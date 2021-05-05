@@ -16,6 +16,10 @@ import bop_toolkit_lib.inout as bop_inout
 import bop_toolkit_lib.misc as bop_misc
 import bop_toolkit_lib.dataset_params as bop_dataset_params
 
+from glob import glob
+import open3d as o3d
+import pandas as pd
+import pclpy
 
 class DatasetModelnet40(Dataset):
 
@@ -263,3 +267,271 @@ class DatasetLinemod(Dataset):
         else:
             print(f"missing file: {file_path}")
             return np.zeros((480, 640), dtype=np.uint8)
+
+import copy
+def draw_registration_result(source, target, transformation):
+    source_temp = copy.deepcopy(source)
+    target_temp = copy.deepcopy(target)
+    source_temp.paint_uniform_color([1, 0.706, 0])
+    target_temp.paint_uniform_color([0, 0.651, 0.929])
+    source_temp.transform(transformation)
+    o3d.visualization.draw_geometries([source_temp, target_temp],
+                                      zoom=0.4459,
+                                      front=[0.9288, -0.2951, -0.2242],
+                                      lookat=[1.6784, 2.0612, 1.4451],
+                                      up=[-0.3402, -0.9189, -0.1996])
+
+class DatasetSevenScenes(Dataset):
+
+    def __init__(self, split, noise_type, subsample= 0):
+        """Initialize the 7-scenes RedKitchen Dataset
+
+        Args:
+            split ([string]): train, test or val
+            noise_type ([type]): only clean is allowed, as the data is already
+            noisy
+            subsample (int, optional): [Choose which views are used for
+            train, test and val]. Use the subsample-th views for training, the
+            views between for validation and the rest for testing. Defaults to
+            -1, that uses seq-01 for training, seq-02 for validation and the
+            rest for testing
+        """
+
+        split = "test" if split == "val" else split # 7-scenes has no validation set
+
+        # load map pointcloud if exists, otherwise reconstruct
+        # labels?
+        self.samples = self.get_samples(split, subsample)
+        self.transforms = self.getTransforms(split, noise_type)
+
+    @classmethod
+    def read_rgbdpose_frame(cls, frame_name):
+        color_file = frame_name + ".color.png"
+        depth_file = frame_name + ".depth.png"
+        poseFile = f"{frame_name}.pose.txt"
+        if not os.path.exists(color_file):
+            print(f"No rgb information found at \"{color_file}\"")
+            exit(-3)
+        if not os.path.exists(depth_file):
+            print(f"No depth information found at \"{depth_file}\"")
+            exit(-3)
+        if not os.path.exists(poseFile):
+            print(f"No pose information found for \"{frame_name}\" at \"{poseFile}\"")
+            exit(-3)
+        color = o3d.io.read_image(color_file)
+        depth = o3d.io.read_image(depth_file)
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            color,
+            depth,
+            depth_scale=1000,
+            depth_trunc=3.0,
+            convert_rgb_to_intensity=False
+            )
+        pose = pd.read_csv(poseFile, '\t', dtype=float, header=None, usecols=list(range(4)))
+        pose = pose.to_numpy()
+        return rgbd_image, pose
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        if self.transforms:
+            sample = self.transforms(sample)
+        return sample
+
+    def get_transforms(self, split, noise_type):
+        # prepare augmentations
+        if noise_type == "clean":
+            transforms = [
+                # downsample
+                Transforms.Resampler(2048),
+                # align source and target using GT -- easier to define error this way
+                Transforms.GtTransformSE3(),
+                # normalize source and target (mean centered, max dist 1.0)
+                Transforms.Normalize(),
+                # apply an initial pose error
+                Transforms.RandomTransformSE3(rot_mag=90.0, trans_mag=1.0, random_mag=True)
+            ]
+        else:
+            raise ValueError(f"Noise type {noise_type} not supported for SevenScenes.")
+        return torchvision.transforms.Compose(transforms)
+
+    @staticmethod
+    def show_sample(sample):
+        target = o3d.geometry.PointCloud()
+        source = o3d.geometry.PointCloud()
+        target.points = o3d.utility.Vector3dVector(sample['points_ref'])
+        source.points = o3d.utility.Vector3dVector(sample['points_src'])
+
+        source_temp = copy.deepcopy(source)
+        target_temp = copy.deepcopy(target)
+        source_temp.paint_uniform_color([1, 0.706, 0])
+        target_temp.paint_uniform_color([0, 0.651, 0.929])
+        o3d.visualization.draw_geometries([source_temp, target_temp])
+
+    @staticmethod
+    def show_pointcloud_pair(source_array, target_array, transform):
+        target = o3d.geometry.PointCloud()
+        source = o3d.geometry.PointCloud()
+        target.points = o3d.utility.Vector3dVector(target_array)
+        source.points = o3d.utility.Vector3dVector(source_array)
+
+        source_temp = copy.deepcopy(source)
+        target_temp = copy.deepcopy(target)
+        source_temp.paint_uniform_color([1, 0.706, 0])
+        target_temp.paint_uniform_color([0, 0.651, 0.929])
+        source_temp.transform(transform)
+        o3d.visualization.draw_geometries([source_temp, target_temp])
+
+    def get_samples(self, split, subsample = 0):
+        dataset_path = cfg.SEVEN_SCENES_PATH
+        sceneO3D = self.get_scene_pointcloud(dataset_path)
+        scene = pclpy.pcl.PointCloud.PointXYZ.from_array(np.asarray(sceneO3D.points))
+        frame_names = self.get_framenames(dataset_path, split, subsample)
+
+        # camera intrinsics
+        intrinsics = o3d.camera.PinholeCameraIntrinsic()
+        intrinsics.set_intrinsics(640,480,585,585,320,240)
+
+        # prepare filter for frustum culling
+        scene_filter = pclpy.pcl.filters.FrustumCulling.PointXYZ()
+        scene_filter.setInputCloud(scene)
+        # FOV calculated from intrinsics (640x480 resolution, f=585)
+        # gt = 57.358, but use a wider FOV for scene
+        scene_filter.setHorizontalFOV(65)
+        # gt = 44.612, but use a wider FOV for scene
+        scene_filter.setVerticalFOV(80)
+        # make the depth fov large enough
+        scene_filter.setNearPlaneDistance(0)
+        scene_filter.setFarPlaneDistance(15)
+
+        # prepare sampling transformation
+        subsampler = Transforms.Resampler(4096)
+        # prepare alginment transformation
+        aligner = Transforms.GtTransformSE3(source_to_target=True)
+
+        samples = []
+
+        for i,frame_name in enumerate(frame_names):
+            # read view pointclouds
+            rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
+            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, intrinsics)
+            viewPointCloud = np.asarray(viewPointCloud.points)
+
+            pose = np.linalg.inv(pose)
+            # pclpy uses different pose format (xyz with x=z)
+            pclpyPose = np.array([pose[2],-pose[1],pose[0],pose[3]])
+            scene_filter.setCameraPose(pclpyPose)
+            frustum = pclpy.pcl.PointCloud.PointXYZ()
+            scene_filter.filter(frustum)
+            # back to numpy
+            frustum = frustum.xyz
+
+            gt = {
+                'cam_R_m2c': pose[np.ix_(range(3),range(3))],
+                'cam_t_m2c': pose[np.ix_(range(3),[3])]
+            }
+
+            sample = {
+                'idx': i,
+                'points_src': viewPointCloud, #conversion needed
+                'points_ref': frustum,
+                #'scene': item['scene'],
+                #'frame': item['frame'],
+                'gt': gt,
+            }
+            print(f"id {i}")
+            if frustum.shape[0] == 0:
+                DatasetSevenScenes.show_pointcloud_pair(viewPointCloud, scene.xyz, np.linalg.inv(pose))
+            # subsample to 4096 here, then subsample to 2048 when reading samples
+            sample = subsampler(sample)
+
+            # currently in transforms, but would be more efficient here I think
+            sample = aligner(sample)
+
+            #DatasetSevenScenes.show_sample(sample)
+
+            samples.append(sample)
+
+        # transform them with the true pose (aligned with map)
+        return samples
+
+    def get_scene_pointcloud(self, dataset_path):
+        if os.path.exists(os.path.join(dataset_path, "integrated.ply")):
+            # read world map from ply
+            scene = o3d.io.read_point_cloud(os.path.join(dataset_path, "integrated.ply"))
+        else:
+            # reconstruct
+            filenames = glob(os.path.join(dataset_path, "seq-[0-9][0-9]", "*.color.png"))
+            filenames = [f[:-10] for f in filenames]
+            filenames.sort()
+
+
+            volume = o3d.pipelines.integration.ScalableTSDFVolume(
+                voxel_length = 4/512,
+                sdf_trunc = 0.04,
+                color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
+                    )
+            intrinsics = o3d.camera.PinholeCameraIntrinsic()
+            intrinsics.set_intrinsics(640,480,585,585,320,240)
+
+
+            for frame_name in filenames:
+                print(f"Integrating {frame_name}")
+                rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
+                pose = np.linalg.inv(pose)
+                volume.integrate(rgbdImage, intrinsics, pose)
+
+            scene = volume.extract_point_cloud()
+            o3d.io.write_point_cloud(os.path.join(dataset_path, "integrated.ply"), scene)
+
+        #scene = pclpy.pcl.PointCloud.PointXYZ.from_array(np.asarray(scene.points))
+        return scene
+
+
+    def get_framenames(self, dataset_path, split, subsample = 0):
+        frames = []
+        if subsample <= 0:
+            if subsample == 0:
+                # use trainsplit from dataset
+                with open(os.path.join(dataset_path, "TrainSplit.txt")) as train_split_file:
+                    train_names = train_split_file.read().split("\n")
+                    train_paths = []
+                    for train_name in train_names:
+                        if len(train_name) == 0:
+                            continue
+                        train_name = train_name[8:]
+                        train_num = int(train_name)
+                        train_path = os.path.join(dataset_path, f"seq-{train_num:02d}")
+                        train_paths.append(train_path)
+                    #train_paths = [os.path.join(dataset_path, train_path.replace("sequence","seq-")) for train_path in train_paths if len(train_path) > 0]
+            else:
+                # use single sequence -subsample
+                train_paths = [os.path.join(dataset_path, f"seq{subsample:03d}")]
+            sequence_paths = glob(os.path.join(dataset_path, "seq-[0-9][0-9]"))
+            if not all(train_path in sequence_paths for train_path in train_paths):
+                raise ValueError(f"A sequence does not exist in {dataset_path}")
+            if split == "train":
+                split_paths = train_paths
+            else:
+                split_paths = [path for path in sequence_paths if path not in train_paths]
+            split_paths.sort()
+            for split_path in split_paths:
+                seq_frames = glob(os.path.join(split_path, "*.color.png"))
+                seq_frames.sort()
+                frames.extend(seq_frames)
+            # cut of .color.png suffix
+            frames = [f[:-10] for f in frames]
+        else:
+            # use every subsamplte-th for training, rest for testing
+            if subsample == 1:
+                raise ValueError(f"Cannot use all frames for training. Use subsample != 1")
+            frames = glob(os.path.join(dataset_path, "seq-[0-9][0-9]", "*.color.png"))
+            frames.sort()
+            if split == "train":
+                frames = [f for i,f in enumerate(frames) if i%subsample == 0]
+            else:
+                frames = [f for i,f in enumerate(frames) if i%subsample != 0]
+        return frames
+

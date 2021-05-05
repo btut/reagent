@@ -2,6 +2,7 @@
 M40_PATH = "/PATH/TO/modelnet40_ply_hdf5_2048"
 SON_PATH = "/PATH/TO/main_split_nobg"
 LM_PATH = "/PATH/TO/BOP19/lm"
+SEVEN_SCENES_PATH = "/PATH/TO/seven_scenes"
 
 BOP_PATH = "/PATH/TO/bop_toolkit"
 
