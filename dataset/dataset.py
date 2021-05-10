@@ -19,7 +19,6 @@ import bop_toolkit_lib.dataset_params as bop_dataset_params
 from glob import glob
 import open3d as o3d
 import pandas as pd
-import pclpy
 
 class DatasetModelnet40(Dataset):
 
@@ -302,7 +301,7 @@ class DatasetSevenScenes(Dataset):
         # load map pointcloud if exists, otherwise reconstruct
         # labels?
         self.samples = self.get_samples(split, subsample)
-        self.transforms = self.getTransforms(split, noise_type)
+        self.transforms = self.get_transforms(split, noise_type)
 
     @classmethod
     def read_rgbdpose_frame(cls, frame_name):
@@ -386,30 +385,23 @@ class DatasetSevenScenes(Dataset):
 
     def get_samples(self, split, subsample = 0):
         dataset_path = cfg.SEVEN_SCENES_PATH
-        sceneO3D = self.get_scene_pointcloud(dataset_path)
-        scene = pclpy.pcl.PointCloud.PointXYZ.from_array(np.asarray(sceneO3D.points))
+        scene = self.get_scene_pointcloud(dataset_path)
+        scene = Transforms.Resampler._resample(scene,20000)
         frame_names = self.get_framenames(dataset_path, split, subsample)
 
         # camera intrinsics
         intrinsics = o3d.camera.PinholeCameraIntrinsic()
         intrinsics.set_intrinsics(640,480,585,585,320,240)
 
-        # prepare filter for frustum culling
-        scene_filter = pclpy.pcl.filters.FrustumCulling.PointXYZ()
-        scene_filter.setInputCloud(scene)
-        # FOV calculated from intrinsics (640x480 resolution, f=585)
-        # gt = 57.358, but use a wider FOV for scene
-        scene_filter.setHorizontalFOV(65)
-        # gt = 44.612, but use a wider FOV for scene
-        scene_filter.setVerticalFOV(80)
-        # make the depth fov large enough
-        scene_filter.setNearPlaneDistance(0)
-        scene_filter.setFarPlaneDistance(15)
-
         # prepare sampling transformation
         subsampler = Transforms.Resampler(4096)
         # prepare alginment transformation
-        aligner = Transforms.GtTransformSE3(source_to_target=True)
+        aligner = Transforms.GtTransformSE3(source_to_target=False)
+
+        # prepare frustum culler
+        frustumCuller = Transforms.FrustumCulling(640, 480, 585)
+
+        transforms = torchvision.transforms.Compose([aligner, frustumCuller, subsampler])
 
         samples = []
 
@@ -420,13 +412,6 @@ class DatasetSevenScenes(Dataset):
             viewPointCloud = np.asarray(viewPointCloud.points)
 
             pose = np.linalg.inv(pose)
-            # pclpy uses different pose format (xyz with x=z)
-            pclpyPose = np.array([pose[2],-pose[1],pose[0],pose[3]])
-            scene_filter.setCameraPose(pclpyPose)
-            frustum = pclpy.pcl.PointCloud.PointXYZ()
-            scene_filter.filter(frustum)
-            # back to numpy
-            frustum = frustum.xyz
 
             gt = {
                 'cam_R_m2c': pose[np.ix_(range(3),range(3))],
@@ -436,23 +421,29 @@ class DatasetSevenScenes(Dataset):
             sample = {
                 'idx': i,
                 'points_src': viewPointCloud, #conversion needed
-                'points_ref': frustum,
+                'points_ref': scene,
                 #'scene': item['scene'],
                 #'frame': item['frame'],
                 'gt': gt,
             }
-            print(f"id {i}")
-            if frustum.shape[0] == 0:
-                DatasetSevenScenes.show_pointcloud_pair(viewPointCloud, scene.xyz, np.linalg.inv(pose))
-            # subsample to 4096 here, then subsample to 2048 when reading samples
-            sample = subsampler(sample)
+            print(f"id {i:05d}, {frame_name} before transformations: {sample['points_ref'].shape[0]:07d} points", end=" ")
 
             # currently in transforms, but would be more efficient here I think
-            sample = aligner(sample)
+            #sample = aligner(sample)
 
-            #DatasetSevenScenes.show_sample(sample)
+            # frustum culling
+            #sample = frustumCuller(sample)
 
+            #if sample['points_ref'].shape[0] == 0: # or i % 100 == 0:
+            #    DatasetSevenScenes.show_sample(sample)
+            #    DatasetSevenScenes.show_pointcloud_pair(viewPointCloud, scene.xyz, np.linalg.inv(pose))
+
+            # subsample to 4096 here, then subsample to 2048 when reading samples
+            #sample = subsampler(sample)
+
+            sample = transforms(sample)
             samples.append(sample)
+            print(f"after transformations: {sample['points_ref'].shape[0]:04d} points")
 
         # transform them with the true pose (aligned with map)
         return samples
@@ -486,8 +477,7 @@ class DatasetSevenScenes(Dataset):
             scene = volume.extract_point_cloud()
             o3d.io.write_point_cloud(os.path.join(dataset_path, "integrated.ply"), scene)
 
-        #scene = pclpy.pcl.PointCloud.PointXYZ.from_array(np.asarray(scene.points))
-        return scene
+        return np.asarray(scene.points)
 
 
     def get_framenames(self, dataset_path, split, subsample = 0):

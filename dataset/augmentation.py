@@ -486,3 +486,19 @@ class SegmentResampler(Resampler):
         sample['points_ref'] = self._resample(sample['points_ref'], self.num)
 
         return sample
+
+class FrustumCulling():
+    """ Delete Points from points_ref that are not visible in points_src
+        Make sure points_src is aligned to points_ref beforehand """
+    def __init__(self, resolutionX, resolutionY, focalLength):
+        self.fovX = resolutionX/(2*focalLength)
+        self.fovY = resolutionY/(2*focalLength)
+
+    def __call__(self, sample: Dict):
+        points = sample['points_ref']
+
+        filter = [abs(point[0]/point[2]) <= self.fovX and abs(point[1]/point[2]) <= self.fovY for point in points]
+
+        sample['points_ref'] = points[filter]
+
+        return sample
