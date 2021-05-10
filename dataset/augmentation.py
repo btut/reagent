@@ -55,7 +55,7 @@ class SplitSourceRef:
 
 
 class Resampler:
-    def __init__(self, num: int):
+    def __init__(self, num: int, source_only : bool = False):
         """Resamples a point cloud containing N points to one containing M
 
         Guaranteed to have no repeated points if M <= N.
@@ -63,9 +63,10 @@ class Resampler:
 
         Args:
             num (int): Number of points to resample to, i.e. M
-
+            source_only (bool): If only the source pointcloud is to be resampled
         """
         self.num = num
+        self.source_only = source_only
 
     def __call__(self, sample):
 
@@ -87,7 +88,8 @@ class Resampler:
                 raise ValueError('Crop proportion must have 1 or 2 elements')
 
             sample['points_src'] = self._resample(sample['points_src'], src_size)
-            sample['points_ref'] = self._resample(sample['points_ref'], ref_size)
+            if not self.source_only:
+                sample['points_ref'] = self._resample(sample['points_ref'], ref_size)
 
         return sample
 
@@ -179,7 +181,7 @@ class TransformSE3:
 
 
 class RandomTransformSE3(TransformSE3):
-    def __init__(self, rot_mag: float = 45.0, trans_mag: float = 0.5, random_mag: bool = False):
+    def __init__(self, rot_mag: float = 45.0, trans_mag: float = 0.5, random_mag: bool = False, use_source: bool = True):
         """Applies a random rigid transformation to the source point cloud
 
         Args:
@@ -188,11 +190,13 @@ class RandomTransformSE3(TransformSE3):
               be in the range [-X,X] in each axis
             random_mag (bool): If true, will randomize the maximum rotation, i.e. will bias towards small
                                perturbations
+            use_source (bool): use points_src if true, points_ref otherwise
         """
         super().__init__()
         self._rot_mag = rot_mag
         self._trans_mag = trans_mag
         self._random_mag = random_mag
+        self._use_source = use_source
 
     def generate_transform(self):
         """Generate a random SE3 transformation (3, 4) """
@@ -228,9 +232,10 @@ class RandomTransformSE3(TransformSE3):
         if 'points' in sample:
             sample['points'], _, _ = self.transform(sample['points'])
         else:
-            transformed, transform_r_s, transform_s_r = self.transform(sample['points_src'])
-            sample['transform_gt'] = transform_r_s  # Apply to source to get reference
-            sample['points_src'] = transformed
+            key = 'points_src' if self._use_source else 'points_ref'
+            transformed, transform_r_s, transform_s_r = self.transform(sample[key])
+            sample['transform_gt'] = transform_r_s if self._use_source else transform_s_r  # Apply to source to get reference
+            sample[key] = transformed
 
         return sample
 
@@ -490,15 +495,23 @@ class SegmentResampler(Resampler):
 class FrustumCulling():
     """ Delete Points from points_ref that are not visible in points_src
         Make sure points_src is aligned to points_ref beforehand """
-    def __init__(self, resolutionX, resolutionY, focalLength):
-        self.fovX = resolutionX/(2*focalLength)
-        self.fovY = resolutionY/(2*focalLength)
+    def __init__(self, intrinsics, translationError, rotationError):
+        if intrinsics.width > intrinsics.height:
+            self.fov = math.atan(intrinsics.get_principal_point()[0]/intrinsics.get_focal_length()[0])
+        else:
+            self.fov = math.atan(intrinsics.get_principal_point()[1]/intrinsics.get_focal_length()[1])
+        self.fov += math.radians(rotationError)
+        self.fov = math.tan(self.fov)
+        self.translationError = translationError
+
+        self.fovX = intrinsics.width/(2*intrinsics.get_focal_length()[0])
+        self.fovY = intrinsics.height/(2*intrinsics.get_focal_length()[1])
+
+    def _cull(self, points):
+        filter = [(x**2+y**2) <= (((z+self.translationError)*self.fov)**2 + self.translationError) for (x,y,z) in points]
+        return points[filter]
 
     def __call__(self, sample: Dict):
         points = sample['points_ref']
-
-        filter = [abs(point[0]/point[2]) <= self.fovX and abs(point[1]/point[2]) <= self.fovY for point in points]
-
-        sample['points_ref'] = points[filter]
-
+        sample['points_ref'] = self._cull(points)
         return sample

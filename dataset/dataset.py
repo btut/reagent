@@ -19,6 +19,7 @@ import bop_toolkit_lib.dataset_params as bop_dataset_params
 from glob import glob
 import open3d as o3d
 import pandas as pd
+from pathlib import Path
 
 class DatasetModelnet40(Dataset):
 
@@ -298,9 +299,16 @@ class DatasetSevenScenes(Dataset):
 
         split = "test" if split == "val" else split # 7-scenes has no validation set
 
+        # camera intrinsics
+        self.intrinsics = o3d.camera.PinholeCameraIntrinsic()
+        self.intrinsics.set_intrinsics(640,480,585,585,320,240)
+
         # load map pointcloud if exists, otherwise reconstruct
-        # labels?
+        self.scene = self.get_scene_pointcloud(cfg.SEVEN_SCENES_PATH)
+
+        # load from rgbd images
         self.samples = self.get_samples(split, subsample)
+
         self.transforms = self.get_transforms(split, noise_type)
 
     @classmethod
@@ -334,7 +342,7 @@ class DatasetSevenScenes(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
+        sample = copy.deepcopy(self.samples[idx])
         if self.transforms:
             sample = self.transforms(sample)
         return sample
@@ -342,16 +350,25 @@ class DatasetSevenScenes(Dataset):
     def get_transforms(self, split, noise_type):
         # prepare augmentations
         if noise_type == "clean":
-            transforms = [
-                # downsample
-                Transforms.Resampler(2048),
-                # align source and target using GT -- easier to define error this way
-                Transforms.GtTransformSE3(),
-                # normalize source and target (mean centered, max dist 1.0)
-                Transforms.Normalize(),
-                # apply an initial pose error
-                Transforms.RandomTransformSE3(rot_mag=90.0, trans_mag=1.0, random_mag=True)
-            ]
+            if split == 'train':
+                transforms = [
+                    Transforms.SetDeterministic(),
+                    # apply an initial pose error to world
+                    Transforms.RandomTransformSE3(rot_mag=45, trans_mag=1.0, random_mag=True, use_source=False),
+                    # Frustum culling
+                    Transforms.FrustumCulling(self.intrinsics, 1, 45),
+                    # subsampling
+                    Transforms.Resampler(2048)
+                ]
+            else:
+                transforms = [
+                    # apply an initial pose error to world
+                    Transforms.RandomTransformSE3(rot_mag=25, trans_mag=.5, random_mag=True, use_source=False),
+                    # Frustum culling
+                    Transforms.FrustumCulling(self.intrinsics, 1, 45),
+                    # subsampling
+                    Transforms.Resampler(2048)
+                ]
         else:
             raise ValueError(f"Noise type {noise_type} not supported for SevenScenes.")
         return torchvision.transforms.Compose(transforms)
@@ -385,73 +402,55 @@ class DatasetSevenScenes(Dataset):
 
     def get_samples(self, split, subsample = 0):
         dataset_path = cfg.SEVEN_SCENES_PATH
-        scene = self.get_scene_pointcloud(dataset_path)
-        scene = Transforms.Resampler._resample(scene,20000)
+        scene_name = os.path.basename(dataset_path)
         frame_names = self.get_framenames(dataset_path, split, subsample)
 
-        # camera intrinsics
-        intrinsics = o3d.camera.PinholeCameraIntrinsic()
-        intrinsics.set_intrinsics(640,480,585,585,320,240)
-
         # prepare sampling transformation
-        subsampler = Transforms.Resampler(4096)
+        subsampler = Transforms.Resampler(4096, source_only = True)
         # prepare alginment transformation
         aligner = Transforms.GtTransformSE3(source_to_target=False)
 
-        # prepare frustum culler
-        frustumCuller = Transforms.FrustumCulling(640, 480, 585)
-
-        transforms = torchvision.transforms.Compose([aligner, frustumCuller, subsampler])
+        static_transforms = torchvision.transforms.Compose([aligner, subsampler])
 
         samples = []
 
         for i,frame_name in enumerate(frame_names):
             # read view pointclouds
             rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
-            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, intrinsics)
+            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics)
             viewPointCloud = np.asarray(viewPointCloud.points)
 
             pose = np.linalg.inv(pose)
 
-            gt = {
-                'cam_R_m2c': pose[np.ix_(range(3),range(3))],
-                'cam_t_m2c': pose[np.ix_(range(3),[3])]
-            }
+            sequence_name = Path(frame_name).parent.name
 
             sample = {
                 'idx': i,
-                'points_src': viewPointCloud, #conversion needed
-                'points_ref': scene,
-                #'scene': item['scene'],
-                #'frame': item['frame'],
-                'gt': gt,
+                'label' : i,
+                'points_src': viewPointCloud,
+                'points_ref': self.scene,
+                'scene': scene_name,
+                'sequence' : sequence_name,
+                'frame': os.path.basename(frame_name),
+                'gt': {
+                    'cam_R_m2c': pose[np.ix_(range(3),range(3))],
+                    'cam_t_m2c': pose[np.ix_(range(3),[3])]
+                },
+                'cam' : {
+                    'cam_K' : self.intrinsics.intrinsic_matrix,
+                    'obj_id' : scene_name
+                }
             }
-            print(f"id {i:05d}, {frame_name} before transformations: {sample['points_ref'].shape[0]:07d} points", end=" ")
 
-            # currently in transforms, but would be more efficient here I think
-            #sample = aligner(sample)
-
-            # frustum culling
-            #sample = frustumCuller(sample)
-
-            #if sample['points_ref'].shape[0] == 0: # or i % 100 == 0:
-            #    DatasetSevenScenes.show_sample(sample)
-            #    DatasetSevenScenes.show_pointcloud_pair(viewPointCloud, scene.xyz, np.linalg.inv(pose))
-
-            # subsample to 4096 here, then subsample to 2048 when reading samples
-            #sample = subsampler(sample)
-
-            sample = transforms(sample)
+            sample = static_transforms(sample)
             samples.append(sample)
-            print(f"after transformations: {sample['points_ref'].shape[0]:04d} points")
 
-        # transform them with the true pose (aligned with map)
         return samples
 
     def get_scene_pointcloud(self, dataset_path):
-        if os.path.exists(os.path.join(dataset_path, "integrated.ply")):
+        if os.path.exists(os.path.join(dataset_path, "integrated_mesh.ply")):
             # read world map from ply
-            scene = o3d.io.read_point_cloud(os.path.join(dataset_path, "integrated.ply"))
+            mesh = o3d.io.read_triangle_mesh(os.path.join(dataset_path, "integrated_mesh.ply"))
         else:
             # reconstruct
             filenames = glob(os.path.join(dataset_path, "seq-[0-9][0-9]", "*.color.png"))
@@ -474,10 +473,15 @@ class DatasetSevenScenes(Dataset):
                 pose = np.linalg.inv(pose)
                 volume.integrate(rgbdImage, intrinsics, pose)
 
-            scene = volume.extract_point_cloud()
-            o3d.io.write_point_cloud(os.path.join(dataset_path, "integrated.ply"), scene)
+            mesh = volume.extract_triangle_mesh()
+            mesh = mesh.simplify_quadric_decimation(100000)
+            mesh.remove_degenerate_triangles()
+            mesh.remove_duplicated_triangles()
+            mesh.remove_duplicated_vertices()
+            mesh.remove_non_manifold_edges()
+            o3d.io.write_triangle_mesh(os.path.join(dataset_path, "integrated_mesh.ply"), mesh)
 
-        return np.asarray(scene.points)
+        return np.asarray(mesh.vertices)
 
 
     def get_framenames(self, dataset_path, split, subsample = 0):
