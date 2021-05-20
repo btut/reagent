@@ -1,3 +1,4 @@
+import copy
 import math
 from typing import Dict
 import numpy as np
@@ -6,6 +7,7 @@ from scipy.stats import special_ortho_group
 import torch
 import torch.utils.data
 import transforms3d as t3d
+import open3d as o3d
 # Adapted from RPM-Net (Yew et al., 2020): https://github.com/yewzijian/RPMNet
 
 
@@ -504,14 +506,54 @@ class FrustumCulling():
         self.fov = math.tan(self.fov)
         self.translationError = translationError
 
-        self.fovX = intrinsics.width/(2*intrinsics.get_focal_length()[0])
-        self.fovY = intrinsics.height/(2*intrinsics.get_focal_length()[1])
+    @staticmethod
+    def _get_transform_matrix(transform):
+        if type(transform) == dict:
+            transform = np.concatenate((transform['cam_R_m2c'], transform['cam_t_m2c']), axis=1)
+        return np.concatenate((transform, [[0,0,0,1]]), axis=0)
 
-    def _cull(self, points):
-        filter = [(x**2+y**2) <= (((z+self.translationError)*self.fov)**2 + self.translationError) for (x,y,z) in points]
-        return points[filter]
+    def _cull(self, mesh, transform):
+        # clone mesh
+        transformedMesh = copy.deepcopy(mesh)
+        # transform mesh (view+transform_gt)
+        transformedMesh.transform(transform)
+
+        # create filter in cloned mesh
+        filteredTriangles = []
+
+        for triangle in transformedMesh.triangles:
+            for point in triangle:
+                x,y,z = transformedMesh.vertices[point]
+                # only use triangle if one of its point is inside frustum
+                if (x**2+y**2) <=  (((z+self.translationError)*self.fov)**2 + self.translationError):
+                    triangleIsInside = True
+                    filteredTriangles.append(triangle)
+                    break
+
+        culledMesh = copy.deepcopy(mesh)
+        culledMesh.triangles = o3d.utility.Vector3iVector(filteredTriangles)
+        culledMesh.remove_unreferenced_vertices()
+        return culledMesh
 
     def __call__(self, sample: Dict):
-        points = sample['points_ref']
-        sample['points_ref'] = self._cull(points)
+        mesh = sample['points_ref']
+        transform = np.matmul(self._get_transform_matrix(sample['view']) , self._get_transform_matrix(sample['transform_gt']))
+        sample['points_ref'] = self._cull(mesh, transform)
+        return sample
+
+class FrustumSampler():
+    def __init__(self, intrinsics, rotationError, viewSamples):
+        if intrinsics.width > intrinsics.height:
+            fov = math.atan(intrinsics.get_principal_point()[0]/intrinsics.get_focal_length()[0])
+        else:
+            fov = math.atan(intrinsics.get_principal_point()[1]/intrinsics.get_focal_length()[1])
+        fov += math.radians(rotationError)
+        fov = math.tan(fov)
+
+        viewArea = intrinsics.get_focal_length()[0]*intrinsics.get_focal_length()[1]/(intrinsics.width*intrinsics.height)
+        self.frustumSamples = int(math.pi*(fov**2)*viewSamples*viewArea)
+
+    def __call__(self, sample: Dict):
+        mesh = sample['points_ref']
+        sample['points_ref'] = np.asarray(mesh.sample_points_uniformly(self.frustumSamples).points)
         return sample

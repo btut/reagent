@@ -343,6 +343,7 @@ class DatasetSevenScenes(Dataset):
 
     def __getitem__(self, idx):
         sample = copy.deepcopy(self.samples[idx])
+        sample['points_ref'] = self.scene
         if self.transforms:
             sample = self.transforms(sample)
         return sample
@@ -354,20 +355,26 @@ class DatasetSevenScenes(Dataset):
                 transforms = [
                     Transforms.SetDeterministic(),
                     # apply an initial pose error to world
-                    Transforms.RandomTransformSE3(rot_mag=45, trans_mag=1.0, random_mag=True, use_source=False),
+                    Transforms.RandomTransformSE3(rot_mag=45, trans_mag=1.0, random_mag=True),
                     # Frustum culling
                     Transforms.FrustumCulling(self.intrinsics, 1, 45),
+                    # Frustum sampling (more samples than points_src for similar
+                    # density)
+                    Transforms.FrustumSampler(self.intrinsics, 45, 2048),
                     # subsampling
-                    Transforms.Resampler(2048)
+                    Transforms.Resampler(2048, True)
                 ]
             else:
                 transforms = [
                     # apply an initial pose error to world
-                    Transforms.RandomTransformSE3(rot_mag=25, trans_mag=.5, random_mag=True, use_source=False),
+                    Transforms.RandomTransformSE3(rot_mag=25, trans_mag=.5, random_mag=True),
                     # Frustum culling
                     Transforms.FrustumCulling(self.intrinsics, 1, 45),
+                    # Frustum sampling (more samples than points_src for similar
+                    # density)
+                    Transforms.FrustumSampler(self.intrinsics, 45, 2048),
                     # subsampling
-                    Transforms.Resampler(2048)
+                    Transforms.Resampler(2048, True)
                 ]
         else:
             raise ValueError(f"Noise type {noise_type} not supported for SevenScenes.")
@@ -407,20 +414,15 @@ class DatasetSevenScenes(Dataset):
 
         # prepare sampling transformation
         subsampler = Transforms.Resampler(4096, source_only = True)
-        # prepare alginment transformation
-        aligner = Transforms.GtTransformSE3(source_to_target=False)
-
-        static_transforms = torchvision.transforms.Compose([aligner, subsampler])
 
         samples = []
 
         for i,frame_name in enumerate(frame_names):
             # read view pointclouds
             rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
-            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics)
-            viewPointCloud = np.asarray(viewPointCloud.points)
-
             pose = np.linalg.inv(pose)
+            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics, extrinsic=pose)
+            viewPointCloud = np.asarray(viewPointCloud.points)
 
             sequence_name = Path(frame_name).parent.name
 
@@ -428,13 +430,16 @@ class DatasetSevenScenes(Dataset):
                 'idx': i,
                 'label' : i,
                 'points_src': viewPointCloud,
-                'points_ref': self.scene,
                 'scene': scene_name,
                 'sequence' : sequence_name,
                 'frame': os.path.basename(frame_name),
-                'gt': {
+                'view': {
                     'cam_R_m2c': pose[np.ix_(range(3),range(3))],
                     'cam_t_m2c': pose[np.ix_(range(3),[3])]
+                },
+                'gt' : {
+                    'cam_R_m2c' : np.eye(3),
+                    'cam_t_m2c' : np.array([[0],[0],[0]])
                 },
                 'cam' : {
                     'cam_K' : self.intrinsics.intrinsic_matrix,
@@ -442,7 +447,7 @@ class DatasetSevenScenes(Dataset):
                 }
             }
 
-            sample = static_transforms(sample)
+            sample = subsampler(sample)
             samples.append(sample)
 
         return samples
@@ -474,14 +479,10 @@ class DatasetSevenScenes(Dataset):
                 volume.integrate(rgbdImage, intrinsics, pose)
 
             mesh = volume.extract_triangle_mesh()
-            mesh = mesh.simplify_quadric_decimation(100000)
-            mesh.remove_degenerate_triangles()
-            mesh.remove_duplicated_triangles()
-            mesh.remove_duplicated_vertices()
-            mesh.remove_non_manifold_edges()
+            mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=20000)
             o3d.io.write_triangle_mesh(os.path.join(dataset_path, "integrated_mesh.ply"), mesh)
 
-        return np.asarray(mesh.vertices)
+        return mesh
 
 
     def get_framenames(self, dataset_path, split, subsample = 0):
