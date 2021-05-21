@@ -284,7 +284,7 @@ if __name__ == '__main__':
                                         f"{os.path.join(code_path, f'weights/m40_pretrain.zip')}. Run with "
                                         f"'pretrain' first or download the provided weights.")
 
-        noise_type = "jitter" if dataset == "m40" else "segmentation"
+        noise_type = "jitter" if dataset == "m40" else "clean" if dataset == "7scenes" else "segmentation"
         epochs = 50 if dataset == "m40" else 100
         lr = 1e-4 if dataset == "m40" else 1e-3
         lr_step = 10 if dataset == "m40" else 20

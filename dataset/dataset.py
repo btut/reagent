@@ -422,7 +422,7 @@ class DatasetSevenScenes(Dataset):
             rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
             pose = np.linalg.inv(pose)
             viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics, extrinsic=pose)
-            viewPointCloud = np.asarray(viewPointCloud.points)
+            viewPointCloud = np.asarray(viewPointCloud.points, dtype=np.float32)
 
             sequence_name = Path(frame_name).parent.name
 

@@ -555,5 +555,5 @@ class FrustumSampler():
 
     def __call__(self, sample: Dict):
         mesh = sample['points_ref']
-        sample['points_ref'] = np.asarray(mesh.sample_points_uniformly(self.frustumSamples).points)
+        sample['points_ref'] = np.asarray(mesh.sample_points_uniformly(self.frustumSamples).points, dtype=np.float32)
         return sample
