@@ -20,7 +20,7 @@ from registration.model import Agent
 import registration.model as util_model
 import utility.metrics as metrics
 from utility.logger import Logger
-from dataset.dataset import DatasetModelnet40, DatasetLinemod
+from dataset.dataset import DatasetModelnet40, DatasetLinemod, DatasetSevenScenes
 import config as cfg
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,7 +30,7 @@ def train(agent, logger, dataset, noise_type, epochs, lr, lr_step, alpha, model_
     optimizer = torch.optim.Adam(agent.parameters(), lr=lr, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, lr_step, 0.5)
 
-    Dataset = DatasetModelnet40 if dataset == "m40" else DatasetLinemod
+    Dataset = DatasetModelnet40 if dataset == "m40" else DatasetSevenScenes if dataset == "7scenes" else DatasetLinemod
     train_dataset = Dataset("train", noise_type)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True)
     val_dataset = Dataset("val", noise_type)

@@ -50,6 +50,11 @@ The ScanObjectNN dataset is currently not publicly available but can be requeste
 Please see the [project page](https://hkust-vgd.github.io/scanobjectnn/) for further information. The corresponding parameter
 in `config.py` is `SON_PATH`.
 
+### 7-Scenes
+Any of the 7-Scenes datasets can be downloaded
+[here](https://www.microsoft.com/en-us/research/project/rgb-d-dataset-7-scenes/).
+Extract the dataset and set the 'SEVEN_SCENES_PATH' accordingly in `config.py`.
+
 
 ### LINEMOD
 For additional experiments on the object pose estimation task, we use the version of LINEMOD prepared for the 
@@ -91,20 +96,23 @@ Then, we finetune the model on noisy samples (as described in the paper). For th
 where `MODE` is either IL-only (`il`) or IL+RL using the stepwise reward (`ilrl`). The pretraining and finetuning step 
 take about 1h each on a GTX 1080.
 
-For the experiment on LINEMOD, we skip the pretraining step and directly train on the noisy samples. Training 
+For the experiment on LINEMOD and 7-Scenes, we skip the pretraining step and directly train on the noisy samples. Training
 takes about 1h on a GTX 1080 using
 
-`python registration/train.py --mode=MODE --dataset=lm`.
+`python registration/train.py --mode=MODE --dataset=lm`
+for the LINEMOD dataset or
+`python registration/train.py --mode=MODE --dataset=7scenes`
+for the 7-Scenes dataset.
 
 ## Evaluation
 
-### ModelNet40 and ScanObjectNN
-To compute the results for ModelNet40 and ScanObjectNN, run
+### ModelNet40, ScanObjectNN and 7-Scenes
+To compute the results for ModelNet40, ScanObjectNN or 7-Scenes, run
 
 `python registration/eval.py --mode=MODE --dataset=DATASET`,
 
 with `DATASET` being either `m40-model` (first 20 categories, test split), `m40-cat` (last 20, test split) or, for 
-ScanObjectNN, `son`.
+ScanObjectNN, `son` or, for 7-Scenes, `7scenes`.
 
 ### LINEMOD
 The results for LINEMOD are computed using the BOP Toolkit. The evaluation script exports the required file by running
