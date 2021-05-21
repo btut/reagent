@@ -55,6 +55,9 @@ Any of the 7-Scenes datasets can be downloaded
 [here](https://www.microsoft.com/en-us/research/project/rgb-d-dataset-7-scenes/).
 Extract the dataset and set the 'SEVEN_SCENES_PATH' accordingly in `config.py`.
 
+NOTE: The first time reagent is started on a 7-Scenes dataset, it reconstructs the full scene.
+This may take a while.
+
 
 ### LINEMOD
 For additional experiments on the object pose estimation task, we use the version of LINEMOD prepared for the 
