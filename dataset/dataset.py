@@ -473,7 +473,6 @@ class DatasetSevenScenes(Dataset):
 
 
             for frame_name in filenames:
-                print(f"Integrating {frame_name}")
                 rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
                 pose = np.linalg.inv(pose)
                 volume.integrate(rgbdImage, intrinsics, pose)
