@@ -240,9 +240,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ReAgent - training on ModelNet40 and LINEMOD')
     parser.add_argument('--mode', type=str, default='il', choices=['pretrain', 'il', 'ilrl'],
                         help='pretraining (pretrain), IL-only (il), IL+RL with a step-wise reward (ilrls).')
-    parser.add_argument('--dataset', type=str, default='m40', choices=['m40', 'lm'],
+    parser.add_argument('--dataset', type=str, default='m40', choices=['m40', '7scenes', 'lm'],
                         help='Dataset used for training. All experiments on ModelNet40 and ScanObjectNN use the same '
-                             'weights - train both with "m40". Experiments on LINEMOD ("lm") use no pretraining.')
+                             'weights - train both with "m40". Experiments on LINEMOD ("lm") and 7-Scenes (7scenes) use no pretraining.')
     args = parser.parse_args()
 
     # PATHS

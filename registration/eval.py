@@ -111,7 +111,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ReAgent - evaluation on ModelNet40, ScanObjectNN and LINEMOD')
     parser.add_argument('--mode', type=str, default='ilrl', choices=['il', 'ilrl'],
                         help='IL-only (il), IL+RL with a step-wise reward (ilrl)')
-    parser.add_argument('--dataset', type=str, default='m40-model', choices=['m40-model', 'm40-cat', 'son', 'lm'],
+    parser.add_argument('--dataset', type=str, default='m40-model', choices=['m40-model', 'm40-cat', 'son', 'lm', '7scenes'],
                         help='Dataset used for evaluation. For ModelNet40, either the held-out models ("m40-model") '
                              'or the held-out categories ("m40-cat") can be selected.')
     parser.add_argument('--batch_size', type=int, default=32,
