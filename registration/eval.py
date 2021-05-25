@@ -132,7 +132,7 @@ if __name__ == '__main__':
         test_dataset = DatasetScanObjectNN("test", "sensor")
         pretrain = os.path.join(code_path, f"weights/m40_{args.mode}.zip")  # same weights for M40 and SON
         bop_results_path = ""
-    else if args.dataset == "7scenes":
+    elif args.dataset == "7scenes":
         from dataset.dataset import DatasetSevenScenes
         test_dataset = DatasetSevenScenes("test", "clean", 0)
         pretrain = os.path.join(code_path, f"weights/7scenes_{args.mode}.zip")
