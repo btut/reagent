@@ -101,17 +101,19 @@ def evaluate(agent, test_loader, dataset_name, bop_results_path="", visualize=Fa
         # log test metrics
         print(f"MAE R: {summary_metrics['r_mae']:0.2f}")
         print(f"MAE t: {summary_metrics['t_mae']:0.3f}")
-        print(f"ISO R: {summary_metrics['r_iso']:0.2f}")
-        print(f"ISO t: {summary_metrics['t_iso']:0.3f}")
-        print(f"ADI AUC: {(summary_metrics['adi_auc10'] * 100):0.1f}%")
-        print(f"CD: {summary_metrics['chamfer_dist'] * 1000:0.2f}")
+        print(f"ISO R: {summary_metrics['r_iso']:0.2f} -- "
+              f"<5deg = {summary_metrics['r_iso_5deg']*100:0.2f}%, <10deg = {summary_metrics['r_iso_10deg']*100:0.2f}%")
+        print(f"ISO t: {summary_metrics['t_iso']:0.3f} -- "
+              f"<5cm = {summary_metrics['t_iso_5cm']*100:0.2f}%, <10cm = {summary_metrics['t_iso_10cm']*100:0.2f}%")
+        # print(f"ADI AUC: {(summary_metrics['adi_auc10'] * 100):0.1f}%")
+        # print(f"CD: {summary_metrics['chamfer_dist'] * 1000:0.2f}")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ReAgent - evaluation on ModelNet40, ScanObjectNN and LINEMOD')
-    parser.add_argument('--mode', type=str, default='ilrl', choices=['il', 'ilrl'],
+    parser.add_argument('--mode', type=str, default='il', choices=['pretrain', 'il', 'ilrl'],
                         help='IL-only (il), IL+RL with a step-wise reward (ilrl)')
-    parser.add_argument('--dataset', type=str, default='m40-model', choices=['m40-model', 'm40-cat', 'son', 'lm', '7scenes'],
+    parser.add_argument('--dataset', type=str, default='7scenes', choices=['m40-model', 'm40-cat', 'son', 'lm', '7scenes'],
                         help='Dataset used for evaluation. For ModelNet40, either the held-out models ("m40-model") '
                              'or the held-out categories ("m40-cat") can be selected.')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -120,6 +122,8 @@ if __name__ == '__main__':
     parser.add_argument('--visualize', dest='visualize', action='store_true',
                         help='If selected, shows a visualization of the registration process.')
     args = parser.parse_args()
+    if args.visualize:
+        args.batch_size = 1
 
     code_path = os.path.dirname(os.path.abspath(__file__)).replace("/registration", "")
     if args.dataset.startswith("m40"):
@@ -132,7 +136,7 @@ if __name__ == '__main__':
         test_dataset = DatasetScanObjectNN("test", "sensor")
         pretrain = os.path.join(code_path, f"weights/m40_{args.mode}.zip")  # same weights for M40 and SON
         bop_results_path = ""
-    else if args.dataset == "7scenes":
+    elif args.dataset == "7scenes":
         from dataset.dataset import DatasetSevenScenes
         test_dataset = DatasetSevenScenes("test", "clean", 0)
         pretrain = os.path.join(code_path, f"weights/7scenes_{args.mode}.zip")

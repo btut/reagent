@@ -303,8 +303,15 @@ class DatasetSevenScenes(Dataset):
         self.intrinsics = o3d.camera.PinholeCameraIntrinsic()
         self.intrinsics.set_intrinsics(640,480,585,585,320,240)
 
+        self.scenes = {}
+
         # load map pointcloud if exists, otherwise reconstruct
-        self.scene = self.get_scene_pointcloud(cfg.SEVEN_SCENES_PATH)
+        for scene_path in os.listdir(cfg.SEVEN_SCENES_PATH):
+            scene_path = os.path.join(cfg.SEVEN_SCENES_PATH, scene_path)
+            if not os.path.isdir(scene_path):
+                continue
+            scene_name = os.path.basename(scene_path)
+            self.scenes[scene_name] = self.get_scene_pointcloud(scene_path)
 
         # load from rgbd images
         self.samples = self.get_samples(split, subsample)
@@ -343,7 +350,7 @@ class DatasetSevenScenes(Dataset):
 
     def __getitem__(self, idx):
         sample = copy.deepcopy(self.samples[idx])
-        sample['points_ref'] = self.scene
+        sample['points_ref'] = self.scenes[sample['scene']]
         if self.transforms:
             sample = self.transforms(sample)
         return sample
@@ -353,7 +360,6 @@ class DatasetSevenScenes(Dataset):
         if noise_type == "clean":
             if split == 'train':
                 transforms = [
-                    Transforms.SetDeterministic(),
                     # apply an initial pose error to world
                     Transforms.RandomTransformSE3(rot_mag=45, trans_mag=1.0, random_mag=True),
                     # Frustum culling
@@ -366,13 +372,14 @@ class DatasetSevenScenes(Dataset):
                 ]
             else:
                 transforms = [
+                    Transforms.SetDeterministic(),
                     # apply an initial pose error to world
                     Transforms.RandomTransformSE3(rot_mag=25, trans_mag=.5, random_mag=True),
                     # Frustum culling
-                    Transforms.FrustumCulling(self.intrinsics, 1, 45),
+                    Transforms.FrustumCulling(self.intrinsics, .5, 25),
                     # Frustum sampling (more samples than points_src for similar
                     # density)
-                    Transforms.FrustumSampler(self.intrinsics, 45, 2048),
+                    Transforms.FrustumSampler(self.intrinsics, 25, 2048),
                     # subsampling
                     Transforms.Resampler(2048, True)
                 ]
@@ -407,58 +414,69 @@ class DatasetSevenScenes(Dataset):
         source_temp.transform(transform)
         o3d.visualization.draw_geometries([source_temp, target_temp])
 
-    def get_samples(self, split, subsample = 0):
-        dataset_path = cfg.SEVEN_SCENES_PATH
-        scene_name = os.path.basename(dataset_path)
-        frame_names = self.get_framenames(dataset_path, split, subsample)
-
-        # prepare sampling transformation
-        subsampler = Transforms.Resampler(4096, source_only = True)
+    def get_samples(self, split, subsample=0):
+        if os.path.exists(os.path.join(cfg.SEVEN_SCENES_PATH, f"{split}.pkl")):
+            samples = pickle.load(open(os.path.join(cfg.SEVEN_SCENES_PATH, f"{split}.pkl"), 'rb'))
+            return samples
 
         samples = []
 
-        for i,frame_name in enumerate(frame_names):
-            # read view pointclouds
-            rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
-            pose = np.linalg.inv(pose)
-            viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics, extrinsic=pose)
-            viewPointCloud = np.asarray(viewPointCloud.points, dtype=np.float32)
+        dataset_path = cfg.SEVEN_SCENES_PATH
 
-            sequence_name = Path(frame_name).parent.name
+        for scene_path in os.listdir(dataset_path):
+            scene_path = os.path.join(cfg.SEVEN_SCENES_PATH, scene_path)
+            if not os.path.isdir(scene_path):
+                continue
+            scene_name = os.path.basename(scene_path)
+            frame_names = self.get_framenames(scene_path, split, subsample)
 
-            sample = {
-                'idx': i,
-                'label' : i,
-                'points_src': viewPointCloud,
-                'scene': scene_name,
-                'sequence' : sequence_name,
-                'frame': os.path.basename(frame_name),
-                'view': {
-                    'cam_R_m2c': pose[np.ix_(range(3),range(3))],
-                    'cam_t_m2c': pose[np.ix_(range(3),[3])]
-                },
-                'gt' : {
-                    'cam_R_m2c' : np.eye(3),
-                    'cam_t_m2c' : np.array([[0],[0],[0]])
-                },
-                'cam' : {
-                    'cam_K' : self.intrinsics.intrinsic_matrix,
-                    'obj_id' : scene_name
+            # prepare sampling transformation
+            subsampler = Transforms.Resampler(4096, source_only = True)
+
+            from tqdm import tqdm
+            for i,frame_name in tqdm(enumerate(frame_names), total=len(frame_names)):
+                # read view pointclouds
+                rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
+                pose = np.linalg.inv(pose)
+                viewPointCloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbdImage, self.intrinsics, extrinsic=pose)
+                viewPointCloud = np.asarray(viewPointCloud.points, dtype=np.float32)
+
+                sequence_name = Path(frame_name).parent.name
+
+                sample = {
+                    'idx': i,
+                    'label' : i,
+                    'points_src': viewPointCloud,
+                    'scene': scene_name,
+                    'sequence' : sequence_name,
+                    'frame': os.path.basename(frame_name),
+                    'view': {
+                        'cam_R_m2c': pose[np.ix_(range(3),range(3))],
+                        'cam_t_m2c': pose[np.ix_(range(3),[3])]
+                    },
+                    'gt' : {
+                        'cam_R_m2c' : np.eye(3),
+                        'cam_t_m2c' : np.array([[0],[0],[0]])
+                    },
+                    'cam' : {
+                        'cam_K' : self.intrinsics.intrinsic_matrix,
+                        'obj_id' : scene_name
+                    }
                 }
-            }
 
-            sample = subsampler(sample)
-            samples.append(sample)
+                sample = subsampler(sample)
+                samples.append(sample)
+        pickle.dump(samples, open(os.path.join(cfg.SEVEN_SCENES_PATH, f"{split}.pkl"), 'wb'))
 
         return samples
 
-    def get_scene_pointcloud(self, dataset_path):
-        if os.path.exists(os.path.join(dataset_path, "integrated_mesh.ply")):
+    def get_scene_pointcloud(self, scene_path):
+        if os.path.exists(os.path.join(scene_path, "integrated_mesh.ply")):
             # read world map from ply
-            mesh = o3d.io.read_triangle_mesh(os.path.join(dataset_path, "integrated_mesh.ply"))
+            mesh = o3d.io.read_triangle_mesh(os.path.join(scene_path, "integrated_mesh.ply"))
         else:
             # reconstruct
-            filenames = glob(os.path.join(dataset_path, "seq-[0-9][0-9]", "*.color.png"))
+            filenames = glob(os.path.join(scene_path, "seq-[0-9][0-9]", "*.color.png"))
             filenames = [f[:-10] for f in filenames]
             filenames.sort()
 
@@ -479,7 +497,7 @@ class DatasetSevenScenes(Dataset):
 
             mesh = volume.extract_triangle_mesh()
             mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=20000)
-            o3d.io.write_triangle_mesh(os.path.join(dataset_path, "integrated_mesh.ply"), mesh)
+            o3d.io.write_triangle_mesh(os.path.join(scene_path, "integrated_mesh.ply"), mesh)
 
         return mesh
 
@@ -489,27 +507,24 @@ class DatasetSevenScenes(Dataset):
         if subsample <= 0:
             if subsample == 0:
                 # use trainsplit from dataset
-                with open(os.path.join(dataset_path, "TrainSplit.txt")) as train_split_file:
+                with open(os.path.join(dataset_path, "TrainSplit.txt"if split == "train" else "TestSplit.txt"))\
+                        as train_split_file:
                     train_names = train_split_file.read().split("\n")
-                    train_paths = []
+                    split_paths = []
                     for train_name in train_names:
                         if len(train_name) == 0:
                             continue
                         train_name = train_name[8:]
                         train_num = int(train_name)
                         train_path = os.path.join(dataset_path, f"seq-{train_num:02d}")
-                        train_paths.append(train_path)
-                    #train_paths = [os.path.join(dataset_path, train_path.replace("sequence","seq-")) for train_path in train_paths if len(train_path) > 0]
+                        split_paths.append(train_path)
             else:
                 # use single sequence -subsample
-                train_paths = [os.path.join(dataset_path, f"seq{subsample:03d}")]
+                split_paths = [os.path.join(dataset_path, f"seq{subsample:03d}")]
             sequence_paths = glob(os.path.join(dataset_path, "seq-[0-9][0-9]"))
-            if not all(train_path in sequence_paths for train_path in train_paths):
+            if not all(train_path in sequence_paths for train_path in split_paths):
                 raise ValueError(f"A sequence does not exist in {dataset_path}")
-            if split == "train":
-                split_paths = train_paths
-            else:
-                split_paths = [path for path in sequence_paths if path not in train_paths]
+
             split_paths.sort()
             for split_path in split_paths:
                 seq_frames = glob(os.path.join(split_path, "*.color.png"))

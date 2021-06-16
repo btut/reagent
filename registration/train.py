@@ -231,9 +231,9 @@ def evaluate(agent, logger, loader, prefix='test'):
         logger.record(f"{prefix}/mae-t", summary_metrics['t_mae'])
         logger.record(f"{prefix}/iso-r", summary_metrics['r_iso'])
         logger.record(f"{prefix}/iso-t", summary_metrics['t_iso'])
-        logger.record(f"{prefix}/chamfer", summary_metrics['chamfer_dist'])
-        logger.record(f"{prefix}/adi-auc", summary_metrics['adi_auc10'] * 100)
-        return summary_metrics['chamfer_dist']
+        # logger.record(f"{prefix}/chamfer", summary_metrics['chamfer_dist'])
+        # logger.record(f"{prefix}/adi-auc", summary_metrics['adi_auc10'] * 100)
+        return summary_metrics['t_iso']#summary_metrics['chamfer_dist']
 
 
 if __name__ == '__main__':
@@ -260,7 +260,7 @@ if __name__ == '__main__':
     # TRAINING
     agent = Agent().to(DEVICE)
 
-    if args.mode == "pretrain" and dataset == "m40":
+    if args.mode == "pretrain" and dataset in ["m40", "7scenes"]:
         print(f"Training: dataset '{dataset}'  - mode '{args.mode}'")
         train(agent, logger, dataset, noise_type="clean", epochs=50, lr=1e-3, lr_step=10, alpha=0,
               model_path=model_path)
@@ -275,19 +275,19 @@ if __name__ == '__main__':
             raise ValueError("No pretraining on LINEMOD. Use 'il' or 'ilrl' instead.")
         print(f"Training: dataset '{dataset}' - mode '{args.mode}'{f' - alpha={alpha}' if args.mode != 'il' else ''}")
 
-        if dataset == "m40":
+        if dataset in ["m40", "7scenes"]:
             print("  loading pretrained weights...")
-            if os.path.exists(os.path.join(code_path, f"weights/m40_pretrain.zip")):
-                util_model.load(agent, os.path.join(code_path, f"weights/m40_pretrain.zip"))
+            if os.path.exists(os.path.join(code_path, f"weights/{dataset}_pretrain.zip")):
+                util_model.load(agent, os.path.join(code_path, f"weights/{dataset}_pretrain.zip"))
             else:
                 raise FileNotFoundError(f"No pretrained weights found at "
                                         f"{os.path.join(code_path, f'weights/m40_pretrain.zip')}. Run with "
                                         f"'pretrain' first or download the provided weights.")
 
         noise_type = "jitter" if dataset == "m40" else "clean" if dataset == "7scenes" else "segmentation"
-        epochs = 50 if dataset == "m40" else 100
-        lr = 1e-4 if dataset == "m40" else 1e-3
-        lr_step = 10 if dataset == "m40" else 20
+        epochs = 50 if dataset != "lm" else 100
+        lr = 1e-4 if dataset != "lm" else 1e-3
+        lr_step = 10 if dataset != "lm" else 20
 
         train(agent, logger, dataset, noise_type, epochs=epochs, lr=lr, lr_step=lr_step,
               alpha=alpha, reward_mode=reward_mode, model_path=model_path)
