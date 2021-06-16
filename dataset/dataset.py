@@ -20,6 +20,7 @@ from glob import glob
 import open3d as o3d
 import pandas as pd
 from pathlib import Path
+from tqdm import tqdm
 
 class DatasetModelnet40(Dataset):
 
@@ -433,7 +434,7 @@ class DatasetSevenScenes(Dataset):
             # prepare sampling transformation
             subsampler = Transforms.Resampler(4096, source_only = True)
 
-            from tqdm import tqdm
+            print(f"Reading frames for {scene_path}")
             for i,frame_name in tqdm(enumerate(frame_names), total=len(frame_names)):
                 # read view pointclouds
                 rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
@@ -476,6 +477,7 @@ class DatasetSevenScenes(Dataset):
             mesh = o3d.io.read_triangle_mesh(os.path.join(scene_path, "integrated_mesh.ply"))
         else:
             # reconstruct
+            print(f"Reconstructing {scene_path}")
             filenames = glob(os.path.join(scene_path, "seq-[0-9][0-9]", "*.color.png"))
             filenames = [f[:-10] for f in filenames]
             filenames.sort()
@@ -490,7 +492,7 @@ class DatasetSevenScenes(Dataset):
             intrinsics.set_intrinsics(640,480,585,585,320,240)
 
 
-            for frame_name in filenames:
+            for frame_name in tqdm(filenames, total=len(filenames)):
                 rgbdImage, pose = DatasetSevenScenes.read_rgbdpose_frame(frame_name)
                 pose = np.linalg.inv(pose)
                 volume.integrate(rgbdImage, intrinsics, pose)
